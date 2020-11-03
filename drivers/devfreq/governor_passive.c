@@ -141,6 +141,21 @@ static int devfreq_passive_event_handler(struct devfreq *devfreq,
 		if (!p_data->this)
 			p_data->this = devfreq;
 
+		/*
+		 * If the parent device changes the their frequency before
+		 * registering the passive device, the passive device cannot
+		 * receive the notification from parent device and then the
+		 * passive device cannot be able to set the proper frequency
+		 * according to the frequency of parent device.
+		 *
+		 * When start the passive governor, update the frequency
+		 * according to the frequency of parent device.
+		 */
+		ret = devfreq_update_target(devfreq, parent->previous_freq);
+		if (ret < 0)
+			dev_warn(&devfreq->dev,
+			"failed to update devfreq using passive governor\n");
+
 		nb->notifier_call = devfreq_passive_notifier_call;
 		ret = devfreq_register_notifier(parent, nb,
 					DEVFREQ_TRANSITION_NOTIFIER);
