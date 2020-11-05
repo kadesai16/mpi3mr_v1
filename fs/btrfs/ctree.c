@@ -1353,7 +1353,8 @@ get_old_root(struct btrfs_root *root, u64 time_seq)
 	if (old_root && tm && tm->op != MOD_LOG_KEY_REMOVE_WHILE_FREEING) {
 		btrfs_tree_read_unlock(eb_root);
 		free_extent_buffer(eb_root);
-		old = read_tree_block(fs_info, logical, 0, level, NULL);
+		old = read_tree_block(fs_info, logical,
+				      root->root_key.objectid, 0, level, NULL);
 		if (WARN_ON(IS_ERR(old) || !extent_buffer_uptodate(old))) {
 			if (!IS_ERR(old))
 				free_extent_buffer(old);
@@ -1570,7 +1571,6 @@ int btrfs_realloc_node(struct btrfs_trans_handle *trans,
 	struct btrfs_fs_info *fs_info = root->fs_info;
 	struct extent_buffer *cur;
 	u64 blocknr;
-	u64 gen;
 	u64 search_start = *last_ret;
 	u64 last_block = 0;
 	u64 other;
@@ -1579,7 +1579,6 @@ int btrfs_realloc_node(struct btrfs_trans_handle *trans,
 	int i;
 	int err = 0;
 	int parent_level;
-	int uptodate;
 	u32 blocksize;
 	int progress_passed = 0;
 	struct btrfs_disk_key disk_key;
@@ -1597,7 +1596,6 @@ int btrfs_realloc_node(struct btrfs_trans_handle *trans,
 		return 0;
 
 	for (i = start_slot; i <= end_slot; i++) {
-		struct btrfs_key first_key;
 		int close = 1;
 
 		btrfs_node_key(parent, &disk_key, i);
@@ -1606,8 +1604,6 @@ int btrfs_realloc_node(struct btrfs_trans_handle *trans,
 
 		progress_passed = 1;
 		blocknr = btrfs_node_blockptr(parent, i);
-		gen = btrfs_node_ptr_generation(parent, i);
-		btrfs_node_key_to_cpu(parent, &first_key, i);
 		if (last_block == 0)
 			last_block = blocknr;
 
@@ -1624,31 +1620,9 @@ int btrfs_realloc_node(struct btrfs_trans_handle *trans,
 			continue;
 		}
 
-		cur = find_extent_buffer(fs_info, blocknr);
-		if (cur)
-			uptodate = btrfs_buffer_uptodate(cur, gen, 0);
-		else
-			uptodate = 0;
-		if (!cur || !uptodate) {
-			if (!cur) {
-				cur = read_tree_block(fs_info, blocknr, gen,
-						      parent_level - 1,
-						      &first_key);
-				if (IS_ERR(cur)) {
-					return PTR_ERR(cur);
-				} else if (!extent_buffer_uptodate(cur)) {
-					free_extent_buffer(cur);
-					return -EIO;
-				}
-			} else if (!uptodate) {
-				err = btrfs_read_buffer(cur, gen,
-						parent_level - 1,&first_key);
-				if (err) {
-					free_extent_buffer(cur);
-					return err;
-				}
-			}
-		}
+		cur = btrfs_read_node_slot(parent, i);
+		if (IS_ERR(cur))
+			return PTR_ERR(cur);
 		if (search_start == 0)
 			search_start = last_block;
 
@@ -1790,6 +1764,7 @@ struct extent_buffer *btrfs_read_node_slot(struct extent_buffer *parent,
 
 	btrfs_node_key_to_cpu(parent, &first_key, slot);
 	eb = read_tree_block(parent->fs_info, btrfs_node_blockptr(parent, slot),
+			     btrfs_header_owner(parent),
 			     btrfs_node_ptr_generation(parent, slot),
 			     level - 1, &first_key);
 	if (!IS_ERR(eb) && !extent_buffer_uptodate(eb)) {
@@ -2226,7 +2201,7 @@ static void reada_for_search(struct btrfs_fs_info *fs_info,
 		search = btrfs_node_blockptr(node, nr);
 		if ((search <= target && target - search <= 65536) ||
 		    (search > target && search - target <= 65536)) {
-			readahead_tree_block(fs_info, search);
+			btrfs_readahead_node_child(node, nr);
 			nread += blocksize;
 		}
 		nscan++;
@@ -2235,16 +2210,11 @@ static void reada_for_search(struct btrfs_fs_info *fs_info,
 	}
 }
 
-static noinline void reada_for_balance(struct btrfs_fs_info *fs_info,
-				       struct btrfs_path *path, int level)
+static noinline void reada_for_balance(struct btrfs_path *path, int level)
 {
+	struct extent_buffer *parent;
 	int slot;
 	int nritems;
-	struct extent_buffer *parent;
-	struct extent_buffer *eb;
-	u64 gen;
-	u64 block1 = 0;
-	u64 block2 = 0;
 
 	parent = path->nodes[level + 1];
 	if (!parent)
@@ -2253,32 +2223,10 @@ static noinline void reada_for_balance(struct btrfs_fs_info *fs_info,
 	nritems = btrfs_header_nritems(parent);
 	slot = path->slots[level + 1];
 
-	if (slot > 0) {
-		block1 = btrfs_node_blockptr(parent, slot - 1);
-		gen = btrfs_node_ptr_generation(parent, slot - 1);
-		eb = find_extent_buffer(fs_info, block1);
-		/*
-		 * if we get -eagain from btrfs_buffer_uptodate, we
-		 * don't want to return eagain here.  That will loop
-		 * forever
-		 */
-		if (eb && btrfs_buffer_uptodate(eb, gen, 1) != 0)
-			block1 = 0;
-		free_extent_buffer(eb);
-	}
-	if (slot + 1 < nritems) {
-		block2 = btrfs_node_blockptr(parent, slot + 1);
-		gen = btrfs_node_ptr_generation(parent, slot + 1);
-		eb = find_extent_buffer(fs_info, block2);
-		if (eb && btrfs_buffer_uptodate(eb, gen, 1) != 0)
-			block2 = 0;
-		free_extent_buffer(eb);
-	}
-
-	if (block1)
-		readahead_tree_block(fs_info, block1);
-	if (block2)
-		readahead_tree_block(fs_info, block2);
+	if (slot > 0)
+		btrfs_readahead_node_child(parent, slot - 1);
+	if (slot + 1 < nritems)
+		btrfs_readahead_node_child(parent, slot + 1);
 }
 
 
@@ -2406,8 +2354,8 @@ read_block_for_search(struct btrfs_root *root, struct btrfs_path *p,
 		reada_for_search(fs_info, p, level, slot, key->objectid);
 
 	ret = -EAGAIN;
-	tmp = read_tree_block(fs_info, blocknr, gen, parent_level - 1,
-			      &first_key);
+	tmp = read_tree_block(fs_info, blocknr, root->root_key.objectid,
+			      gen, parent_level - 1, &first_key);
 	if (!IS_ERR(tmp)) {
 		/*
 		 * If the read above didn't mark this buffer up to date,
@@ -2454,7 +2402,7 @@ setup_nodes_for_search(struct btrfs_trans_handle *trans,
 			goto again;
 		}
 
-		reada_for_balance(fs_info, p, level);
+		reada_for_balance(p, level);
 		sret = split_node(trans, root, p, level);
 
 		BUG_ON(sret > 0);
@@ -2473,7 +2421,7 @@ setup_nodes_for_search(struct btrfs_trans_handle *trans,
 			goto again;
 		}
 
-		reada_for_balance(fs_info, p, level);
+		reada_for_balance(p, level);
 		sret = balance_level(trans, root, p, level);
 
 		if (sret) {
