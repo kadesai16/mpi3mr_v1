@@ -5171,7 +5171,7 @@ free_eb:
 #endif
 
 struct extent_buffer *alloc_extent_buffer(struct btrfs_fs_info *fs_info,
-					  u64 start)
+					  u64 start, u64 owner_root, int level)
 {
 	unsigned long len = fs_info->nodesize;
 	int num_pages;
@@ -6119,19 +6119,22 @@ int try_release_extent_buffer(struct page *page)
  * btrfs_readahead_tree_block - attempt to readahead a child block.
  * @fs_info - the fs_info for the fs.
  * @bytenr - the bytenr to read.
+ * @owner_root - the objectid of the root that owns this eb.
  * @gen - the generation for the uptodate check, can be 0.
+ * @level - the level for the eb.
  *
  * Attempt to readahead a tree block at @bytenr.  If @gen is 0 then we do a
  * normal uptodate check of the eb, without checking the generation.  If we have
  * to read the block we will not block on anything.
  */
 void btrfs_readahead_tree_block(struct btrfs_fs_info *fs_info,
-				u64 bytenr, u64 gen)
+				u64 bytenr, u64 owner_root, u64 gen,
+				int level)
 {
 	struct extent_buffer *eb;
 	int ret;
 
-	eb = btrfs_find_create_tree_block(fs_info, bytenr);
+	eb = btrfs_find_create_tree_block(fs_info, bytenr, owner_root, level);
 	if (IS_ERR(eb))
 		return;
 
@@ -6159,5 +6162,7 @@ void btrfs_readahead_node_child(struct extent_buffer *node, int slot)
 {
 	btrfs_readahead_tree_block(node->fs_info,
 				   btrfs_node_blockptr(node, slot),
-				   btrfs_node_ptr_generation(node, slot));
+				   btrfs_header_owner(node),
+				   btrfs_node_ptr_generation(node, slot),
+				   btrfs_header_level(node) - 1);
 }
