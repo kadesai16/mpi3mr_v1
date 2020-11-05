@@ -577,9 +577,6 @@ int btrfs_validate_metadata_buffer(struct btrfs_io_bio *io_bio, u64 phy_offset,
 		goto err;
 	}
 
-	btrfs_set_buffer_lockdep_class(btrfs_header_owner(eb),
-				       eb, found_level);
-
 	csum_tree_block(eb, result);
 
 	if (memcmp_extent_buffer(eb, result, 0, csum_size)) {
