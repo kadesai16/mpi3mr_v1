@@ -469,10 +469,11 @@ struct btrfs_discard_ctl {
 	struct btrfs_block_group *block_group;
 	struct list_head discard_list[BTRFS_NR_DISCARD_LISTS];
 	u64 prev_discard;
+	u64 prev_discard_time;
 	atomic_t discardable_extents;
 	atomic64_t discardable_bytes;
 	u64 max_discard_size;
-	unsigned long delay;
+	u64 delay_ms;
 	u32 iops_limit;
 	u32 kbps_limit;
 	u64 discard_extent_bytes;
