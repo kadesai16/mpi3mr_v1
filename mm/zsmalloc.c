@@ -40,6 +40,7 @@
 #include <linux/string.h>
 #include <linux/slab.h>
 #include <linux/pgtable.h>
+#include <asm/sparsemem.h>
 #include <asm/tlbflush.h>
 #include <linux/cpumask.h>
 #include <linux/cpu.h>
