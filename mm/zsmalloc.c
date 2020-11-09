@@ -40,6 +40,7 @@
 #include <linux/string.h>
 #include <linux/slab.h>
 #include <linux/pgtable.h>
+#include <asm/sparsemem.h>
 #include <asm/tlbflush.h>
 #include <linux/cpumask.h>
 #include <linux/cpu.h>
@@ -730,13 +731,10 @@ static void insert_zspage(struct size_class *class,
 	 * We want to see more ZS_FULL pages and less almost empty/full.
 	 * Put pages with higher ->inuse first.
 	 */
-	if (head) {
-		if (get_zspage_inuse(zspage) < get_zspage_inuse(head)) {
-			list_add(&zspage->list, &head->list);
-			return;
-		}
-	}
-	list_add(&zspage->list, &class->fullness_list[fullness]);
+	if (head && get_zspage_inuse(zspage) < get_zspage_inuse(head))
+		list_add(&zspage->list, &head->list);
+	else
+		list_add(&zspage->list, &class->fullness_list[fullness]);
 }
 
 /*
